@@ -65,43 +65,35 @@ describe("taskStorage", () => {
     expect(storage.get("axion.tasks.v1")).toBe(legacyTasks);
   });
 
-  it("preserves the mockup marker for saved task-list examples", () => {
-    installStorage();
-    const mockup: Task = {
-      id: 99,
-      title: "Sample task",
-      desc: "A task list example",
-      tag: "Test",
-      icon: Crosshair,
-      color: "green",
-      status: "running",
-      progress: 1,
-      total: 2,
-      created: "today",
-      updated: "today",
-      isMockup: true,
-    };
-
-    saveTasks([mockup]);
-
-    expect(loadSavedTasks()).toMatchObject([{ id: 99, isMockup: true }]);
-  });
-
-  it("recognizes older mockup entries with translation keys stored as their text", () => {
+  it("removes previously saved mockup tasks when restoring the task list", () => {
     const storage = installStorage();
-    storage.set("axion.tasks.v1", JSON.stringify([{
-      id: 100,
-      title: "task.mockupPatrolTitle",
-      desc: "task.mockupPatrolDescription",
-      tag: "Blox Fruits",
-      status: "running",
-      progress: 2,
-      total: 3,
-      created: "today",
-      updated: "today",
-      isMockup: true,
-    }]));
+    storage.set("axion.tasks.v1", JSON.stringify([
+      {
+        id: 100,
+        title: "Sample task",
+        desc: "Old task mockup",
+        tag: "Blox Fruits",
+        status: "running",
+        progress: 2,
+        total: 3,
+        created: "today",
+        updated: "today",
+        isMockup: true,
+      },
+      {
+        id: 101,
+        title: "Another sample task",
+        desc: "Old task mockup",
+        tag: "Raid",
+        status: "pending",
+        progress: 0,
+        total: 2,
+        created: "today",
+        updated: "today",
+        mockupType: "raid",
+      },
+    ]));
 
-    expect(loadSavedTasks()).toMatchObject([{ mockupType: "patrol" }]);
+    expect(loadSavedTasks()).toEqual([]);
   });
 });

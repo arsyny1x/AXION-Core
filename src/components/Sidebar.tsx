@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Clock3, Database, FileCode, Home, ListTodo, Monitor, MonitorX, Play, Settings, Users, BookOpen, Terminal } from "lucide-react";
+import { Clock3, Database, FileCode, Home, ListTodo, Monitor, MonitorX, Play, Settings, Users, BookOpen, Terminal } from "lucide-react";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { LanguageMessageKey } from "../i18n/languages";
 
@@ -7,7 +7,7 @@ interface Props {
   page: string;
   onNavigate: (p: string) => void;
   counts: { tasks: number; scripts: number; players: number };
-  status: { online: number; offline: number; running: number; pending: number; done: number };
+  status: { online: number; offline: number; running: number; pending: number };
   uptimeStartedAt: number;
 }
 
@@ -67,7 +67,6 @@ export default function Sidebar({ page, onNavigate, counts, status, uptimeStarte
           <div className="sidebar-dashboard-stat offline" aria-label={`${t("sidebar.offline")}: ${status.offline}`}><MonitorX size={12} /><span>{t("sidebar.offline")}</span><b>{status.offline}</b></div>
           <div className="sidebar-dashboard-stat running" aria-label={`${t("sidebar.running")}: ${status.running}`}><Play size={12} /><span>{t("sidebar.running")}</span><b>{status.running}</b></div>
           <div className="sidebar-dashboard-stat pending" aria-label={`${t("sidebar.queued")}: ${status.pending}`}><Clock3 size={12} /><span>{t("sidebar.queued")}</span><b>{status.pending}</b></div>
-          <div className="sidebar-dashboard-stat done" aria-label={`${t("sidebar.done")}: ${status.done}`}><CheckCircle2 size={12} /><span>{t("sidebar.done")}</span><b>{status.done}</b></div>
         </div>
         <div className="sidebar-uptime" aria-label={t("sidebar.uptime", { duration: runtime })}>
           <Clock3 size={11} />

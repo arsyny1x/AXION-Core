@@ -1,5 +1,5 @@
 import { Crosshair, FileCode2, FlaskConical, Layers, RefreshCw, Users } from "lucide-react";
-import type { MockupTaskType, Task, TaskColor, TaskStatus } from "../data/mock";
+import type { Task, TaskColor, TaskStatus } from "../data/mock";
 
 const STORAGE_KEY = "axion.tasks.v1";
 const LEGACY_STORAGE_KEY = "autohub.tasks.v1";
@@ -16,17 +16,6 @@ function isTaskStatus(value: unknown): value is TaskStatus {
   return value === "running" || value === "pending" || value === "done";
 }
 
-function inferMockupType(entry: Record<string, unknown>): MockupTaskType | undefined {
-  if (entry.mockupType === "patrol" || entry.mockupType === "raid" || entry.mockupType === "test") {
-    return entry.mockupType;
-  }
-  if (entry.isMockup !== true) return undefined;
-  if (entry.title === "task.mockupPatrolTitle" || (entry.tag === "Blox Fruits" && entry.total === 3)) return "patrol";
-  if (entry.title === "task.mockupRaidTitle" || (entry.tag === "Raid" && entry.total === 2)) return "raid";
-  if (entry.title === "task.mockupTestTitle" || (entry.tag === "Test" && entry.total === 4)) return "test";
-  return undefined;
-}
-
 export function loadSavedTasks(): Task[] {
   const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
   if (!raw) return [];
@@ -39,6 +28,10 @@ export function loadSavedTasks(): Task[] {
       typeof entry !== "object" || entry === null ||
       typeof entry.id !== "number" ||
       typeof entry.title !== "string" ||
+      entry.isMockup === true ||
+      entry.mockupType === "patrol" ||
+      entry.mockupType === "raid" ||
+      entry.mockupType === "test" ||
       typeof entry.desc !== "string" ||
       typeof entry.tag !== "string" ||
       !isTaskStatus(entry.status) ||
@@ -49,12 +42,10 @@ export function loadSavedTasks(): Task[] {
     ) return [];
 
     const presentation = TASK_PRESENTATION[entry.tag] ?? { icon: Layers, color: "violet" as const };
-    const mockupType = inferMockupType(entry);
     return [{
       ...entry,
       icon: presentation.icon,
       color: presentation.color,
-      ...(mockupType ? { mockupType } : {}),
     }];
   });
 }

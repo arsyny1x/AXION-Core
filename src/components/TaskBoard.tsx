@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ListTodo, MoreVertical, Clock, Play, CheckCircle2, Users, Plus, Monitor } from "lucide-react";
+import { ListTodo, MoreVertical, Clock, Play, CheckCircle2, Users, Monitor } from "lucide-react";
 import type { Task } from "../data/mock";
 import { useLanguage } from "../i18n/LanguageContext";
 
@@ -9,11 +9,9 @@ interface Props {
   onUpdate: (id: number, patch: Partial<Task>) => void;
   onDelete: (id: number) => void;
   notify: (m: string) => void;
-  onAddMockup?: () => void;
-  hasMockupTasks?: boolean;
 }
 
-export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMockup, hasMockupTasks = false }: Props) {
+export default function TaskBoard({ tasks, onUpdate, onDelete, notify }: Props) {
   const { t } = useLanguage();
   const [menu, setMenu] = useState<{ taskId: number; trigger: HTMLButtonElement; top: number; right: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -76,11 +74,6 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
           <ListTodo size={17} />
           <h2>{t("task.list")}</h2>
         </div>
-        {onAddMockup && (
-          <button className="btn-ghost task-mockup-add" onClick={onAddMockup} disabled={hasMockupTasks}>
-            <Plus size={14} /> {t("task.addMockup")}
-          </button>
-        )}
       </header>
 
       <div className="task-list">
@@ -88,12 +81,8 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
         {tasks.map(task => {
           const Icon = task.icon;
           const pct = task.total === 0 ? 0 : Math.round((task.progress / task.total) * 100);
-          const taskTitle = task.mockupType
-            ? t(`task.mockup${task.mockupType[0].toUpperCase()}${task.mockupType.slice(1)}Title`)
-            : task.title;
-          const taskDescription = task.mockupType
-            ? t(`task.mockup${task.mockupType[0].toUpperCase()}${task.mockupType.slice(1)}Description`)
-            : task.desc;
+          const taskTitle = task.title;
+          const taskDescription = task.desc;
           return (
             <article key={task.id} className="task-row">
               <div className={`task-ic c-${task.color}`}>
@@ -108,7 +97,6 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
                     </span>
                   ) : null}
                   <span className="chip tag">{task.tag}</span>
-                  {task.isMockup && <span className="chip mockup">{t("task.mockup")}</span>}
                 </div>
                 <p>{taskDescription}</p>
                 {task.status === "running" && (
@@ -169,9 +157,7 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
               onClick={() => {
                 onUpdate(activeTask.id, { status: "running" });
                 setMenu(null);
-                notify(t("task.startedTask", { title: activeTask.mockupType
-                  ? t(`task.mockup${activeTask.mockupType[0].toUpperCase()}${activeTask.mockupType.slice(1)}Title`)
-                  : activeTask.title }));
+                notify(t("task.startedTask", { title: activeTask.title }));
               }}
             >
               <span>{t("task.startTask")}</span>
@@ -183,9 +169,7 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
               onClick={() => {
                 onUpdate(activeTask.id, { status: "done", progress: activeTask.total });
                 setMenu(null);
-                notify(t("task.completedTask", { title: activeTask.mockupType
-                  ? t(`task.mockup${activeTask.mockupType[0].toUpperCase()}${activeTask.mockupType.slice(1)}Title`)
-                  : activeTask.title }));
+                notify(t("task.completedTask", { title: activeTask.title }));
               }}
             >
               <span>{t("task.markComplete")}</span>
@@ -196,9 +180,7 @@ export default function TaskBoard({ tasks, onUpdate, onDelete, notify, onAddMock
             onClick={() => {
               onDelete(activeTask.id);
               setMenu(null);
-              notify(t("task.deletedTask", { title: activeTask.mockupType
-                ? t(`task.mockup${activeTask.mockupType[0].toUpperCase()}${activeTask.mockupType.slice(1)}Title`)
-                : activeTask.title }));
+              notify(t("task.deletedTask", { title: activeTask.title }));
             }}
           >
             <span>{t("task.deleteTask")}</span>

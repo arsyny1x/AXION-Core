@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Copy, Database, Download, Eye, EyeOff, FileCode2, Pencil, Plus, RefreshCw, Save, Search, Trash2, Upload, X } from "lucide-react";
+import { ChevronDown, Copy, Database, Download, Eye, EyeOff, FileCode2, HardDrive, Pencil, Plus, RefreshCw, Save, Search, Trash2, Upload, X } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -26,11 +26,27 @@ import {
 const STORAGE_KEY = "axion.server-scripts.v1";
 const LEGACY_STORAGE_KEY = "autohub.server-scripts.v1";
 const SELECTED_SCOPE_STORAGE_KEY = "axion.server-scripts.selected-scope.v1";
-const PROFILE_STORAGE_KEYS = ["axion.server-script-profiles.v1", "autohub.server-script-profiles.v1"];
 const PROFILE_FORMAT = "axion.server-script-profile";
 const LEGACY_PROFILE_FORMAT = "autohub.server-script-profile";
 const DEFAULT_API_PORT = 5243;
 const DEFAULT_INVENTORY_CATEGORIES = ["fruits", "swords", "guns", "accessories", "materials"];
+interface DatabaseStorageInfo {
+  usedBytes: number;
+  freeBytes: number | null;
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB", "PB"];
+  let value = bytes;
+  let unitIndex = -1;
+  do {
+    value /= 1024;
+    unitIndex += 1;
+  } while (value >= 1024 && unitIndex < units.length - 1);
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)} ${units[unitIndex]}`;
+}
+
 const INVENTORY_CATEGORY_EMOJI: Record<string, string> = {
   currency: "💰",
   stats: "📊",
@@ -38,26 +54,6 @@ const INVENTORY_CATEGORY_EMOJI: Record<string, string> = {
   stars: "⭐",
   fishing: "🎣",
 };
-const SAMPLE_SOURCE = `return {
-  find_item = function(args)
-    local matches = Server.Items.search(args.query or "", args.includeOffline == true)
-    return {
-      customGameId = Server.Game.customGameId,
-      count = #matches,
-      items = matches
-    }
-  end,
-  get_online_inventory = function(args)
-    args = args or {}
-    local items = Server.Items.getOnline(args.agentId)
-    return {
-      customGameId = Server.Game.customGameId,
-      count = #items,
-      items = items
-    }
-  end
-}`;
-
 function getStoredGameScope(): string {
   try {
     const stored = localStorage.getItem(SELECTED_SCOPE_STORAGE_KEY);
@@ -108,8 +104,8 @@ function persistGameScope(customGameId: string): string | null {
 function createScript(customGameId: string): ServerScript {
   return {
     id: crypto.randomUUID(),
-    name: "Server Script Demo",
-    source: SAMPLE_SOURCE,
+    name: "",
+    source: "",
     customGameId,
   };
 }
@@ -163,6 +159,8 @@ export default function ServerScriptsPage({
   const itemContextMenuRef = useRef<HTMLDivElement>(null);
   const [inventoryItemDraft, setInventoryItemDraft] = useState<InventoryItem | null>(null);
   const [savingInventoryItem, setSavingInventoryItem] = useState(false);
+  const [databaseStorage, setDatabaseStorage] = useState<DatabaseStorageInfo | null>(null);
+  const [databaseStorageLoading, setDatabaseStorageLoading] = useState(false);
   const [itemCategoryMenuOpen, setItemCategoryMenuOpen] = useState(false);
   const [newInventoryCategory, setNewInventoryCategory] = useState("");
   const profileFileInput = useRef<HTMLInputElement>(null);
@@ -202,12 +200,33 @@ export default function ServerScriptsPage({
   const requestConfirmation = (message: string): Promise<boolean> =>
     new Promise(resolve => setConfirmation({ message, resolve }));
 
+  const refreshDatabaseStorage = useCallback(async () => {
+    if (!isTauri()) {
+      setDatabaseStorage(null);
+      return;
+    }
+    setDatabaseStorageLoading(true);
+    try {
+      setDatabaseStorage(await invoke<DatabaseStorageInfo>("axion_database_storage"));
+    } catch (error) {
+      notify(t("serverScript.storageLoadFailed", {
+        detail: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setDatabaseStorageLoading(false);
+    }
+  }, [notify, t]);
+
   const closeConfirmation = (confirmed: boolean) => {
     confirmation?.resolve(confirmed);
     setConfirmation(null);
   };
 
   useEffect(() => subscribeInventory(setInventories), []);
+
+  useEffect(() => {
+    if (view === "database") void refreshDatabaseStorage();
+  }, [refreshDatabaseStorage, view]);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -219,6 +238,7 @@ export default function ServerScriptsPage({
     let unlisteners: Array<() => void> = [];
     void Promise.all([
       listen<InventorySnapshot>("axion-item-cache-updated", ({ payload }) => {
+        if (view === "database") void refreshDatabaseStorage();
         if (payload.customGameId !== selectedGameId) return;
         setWorkspaceReportNotice({
           type: "received",
@@ -245,7 +265,7 @@ export default function ServerScriptsPage({
       active = false;
       unlisteners.forEach(unlisten => unlisten());
     };
-  }, [notify, selectedGameId, t]);
+  }, [notify, refreshDatabaseStorage, selectedGameId, t, view]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -481,34 +501,6 @@ export default function ServerScriptsPage({
     scripts: profileScripts,
   });
 
-  const deleteProfile = async () => {
-    const scopeScripts = scripts.filter(script => script.customGameId === selectedGameId);
-    if (scopeScripts.length === 0) return;
-    if (!(await requestConfirmation(t("serverScript.confirmDeleteProfile").replace("{scope}", selectedGameId)))) return;
-    try {
-      const nextScripts = scripts.filter(script => script.customGameId !== selectedGameId);
-      for (const storageKey of PROFILE_STORAGE_KEYS) {
-        const rawProfiles = localStorage.getItem(storageKey);
-        if (!rawProfiles) continue;
-        const profiles: unknown = JSON.parse(rawProfiles);
-        if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
-          throw new Error("Saved Server Script profiles must be an object");
-        }
-        delete (profiles as Record<string, unknown>)[selectedGameId];
-        localStorage.setItem(storageKey, JSON.stringify(profiles));
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextScripts));
-      scopeScripts.forEach(script => unloadServerScript(script.id, script.customGameId));
-      invalidateSavedServerScripts();
-      setScripts(nextScripts);
-      setSelectedId(null);
-      setDraft(null);
-      notify(t("serverScript.profileDeleted"));
-    } catch (error) {
-      notify(t("serverScript.profileDeleteError", { detail: error instanceof Error ? error.message : String(error) }));
-    }
-  };
-
   const replaceScopeProfile = async (customGameId: string, profileScripts: ServerScript[]) => {
     const currentScopeScripts = scripts.filter(script => script.customGameId === customGameId);
     const stagedScripts = profileScripts.map(script => ({ ...script, id: crypto.randomUUID() }));
@@ -720,6 +712,7 @@ export default function ServerScriptsPage({
     setRefreshingInventory(true);
     try {
       await refreshInventoryCache();
+      if (view === "database") await refreshDatabaseStorage();
     } catch (error) {
       notify(t("serverScript.cacheRefreshFailed", {
         message: t("serverScript.refreshFailed"),
@@ -816,6 +809,7 @@ export default function ServerScriptsPage({
           itemId,
         });
       replaceInventorySnapshot(updated);
+      void refreshDatabaseStorage();
       setItemContextMenu(null);
       setInventoryItemDraft(null);
       setItemCategoryMenuOpen(false);
@@ -845,6 +839,7 @@ export default function ServerScriptsPage({
         itemId: item.itemId ?? null,
       });
       replaceInventorySnapshot(updated);
+      void refreshDatabaseStorage();
       notify(t("serverScript.itemDeleted"));
     } catch (error) {
       notify(t("serverScript.itemDeleteError", {
@@ -868,6 +863,7 @@ export default function ServerScriptsPage({
         customGameId: inventory.customGameId,
         accountId: inventory.accountId,
       });
+      void refreshDatabaseStorage();
       removeInventorySnapshot(inventory.customGameId, inventory.accountId);
       notify(t("serverScript.workspaceDeleted"));
     } catch (error) {
@@ -1084,16 +1080,6 @@ end`;
                 )}
               </div>
             </label>
-            {view === "scripts" && scopedScripts.length > 0 && (
-              <button
-                className="btn-ghost server-script-profile-delete"
-                onClick={() => void deleteProfile()}
-                title={t("serverScript.deleteProfile")}
-                aria-label={t("serverScript.deleteProfile")}
-              >
-                <Trash2 size={15} aria-hidden="true" />
-              </button>
-            )}
           </div>
           <form
             className="server-script-scope-create"
@@ -1133,6 +1119,35 @@ end`;
             </>
           )}
         </div>
+        {view === "database" && (
+          <div className="server-script-storage" aria-label={t("serverScript.storageSummary")}>
+            <HardDrive size={16} aria-hidden="true" />
+            <div className="server-script-storage-values">
+              {databaseStorage ? (
+                <>
+                  <span>{t("serverScript.storageUsed", { size: formatStorageBytes(databaseStorage.usedBytes) })}</span>
+                  <span>{t("serverScript.storageFree", {
+                    size: databaseStorage.freeBytes === null
+                      ? t("serverScript.storageUnavailable")
+                      : formatStorageBytes(databaseStorage.freeBytes),
+                  })}</span>
+                </>
+              ) : (
+                <span>{databaseStorageLoading ? t("serverScript.storageLoading") : t("serverScript.storageUnavailable")}</span>
+              )}
+            </div>
+            <button
+              className="btn-ghost server-script-storage-refresh"
+              type="button"
+              aria-label={t("serverScript.storageRefresh")}
+              title={t("serverScript.storageRefresh")}
+              disabled={databaseStorageLoading}
+              onClick={() => void refreshDatabaseStorage()}
+            >
+              <RefreshCw size={13} className={databaseStorageLoading ? "spin" : ""} />
+            </button>
+          </div>
+        )}
       </div>
 
       {view === "scripts" ? (
@@ -1245,7 +1260,7 @@ end`;
                           <small title={item.category}>{getInventoryCategoryLabel(item.category)}</small>
                           {item.value !== undefined && <small className="server-script-cache-value">{String(item.value)}</small>}
                         </span>
-                        <b>× {item.quantity}</b>
+                        <b className="inventory-item-quantity">× {item.quantity}</b>
                       </li>
                     ))}
                   </ul>
@@ -1343,7 +1358,7 @@ end`;
                         }}
                       >
                         <span>{item.name}<small>{item.category}</small></span>
-                        <b>× {item.quantity}</b>
+                        <b className="inventory-item-quantity">× {item.quantity}</b>
                       </button>
                     ))}
                   </div>

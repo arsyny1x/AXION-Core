@@ -1,7 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 export type TaskStatus = "running" | "pending" | "done";
 export type TaskColor = "blue" | "violet" | "green" | "amber" | "pink";
-export type MockupTaskType = "patrol" | "raid" | "test";
 
 export interface Task {
   id: number;
@@ -17,8 +16,6 @@ export interface Task {
   total: number;
   created: string;
   updated: string;
-  isMockup?: boolean;
-  mockupType?: MockupTaskType;
 }
 
 export interface Agent {

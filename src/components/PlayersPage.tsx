@@ -14,8 +14,6 @@ import {
   UserRound,
   Play,
   Trash2,
-  Plus,
-  Pencil,
 } from "lucide-react";
 import {
   playerService,
@@ -25,12 +23,6 @@ import {
 import type { PlayerStatus } from "../lua-api/types";
 import type { PlayerInfo } from "../lua-api/types";
 import type { Task } from "../data/mock";
-import {
-  createDemoPlayerId,
-  loadDemoPlayers,
-  saveDemoPlayers,
-  type DemoPlayer,
-} from "../services/demoPlayerStorage";
 import { useLanguage } from "../i18n/LanguageContext";
 import { SyntaxCodeEditor } from "./SyntaxCode";
 import {
@@ -127,18 +119,6 @@ export default function PlayersPage({
   }));
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [demoPlayers, setDemoPlayers] = useState<DemoPlayer[]>([]);
-  const [demoPlayersLoaded, setDemoPlayersLoaded] = useState(false);
-  const [demoEditorOpen, setDemoEditorOpen] = useState(false);
-  const [demoEditingId, setDemoEditingId] = useState<string | null>(null);
-  const [demoDraft, setDemoDraft] = useState<Omit<DemoPlayer, "id">>({
-    name: "",
-    status: "online",
-    uptime: "",
-    task: "",
-    description: "",
-    progress: null,
-  });
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [profilePlayerId, setProfilePlayerId] = useState<string | null>(null);
   const [profileLastSeenAt, setProfileLastSeenAt] = useState<number | undefined>();
@@ -186,22 +166,12 @@ export default function PlayersPage({
 
   useEffect(() => {
     try {
-      setDemoPlayers(loadDemoPlayers());
-      setDemoPlayersLoaded(true);
+      localStorage.removeItem("axion.players.demo.v1");
+      localStorage.removeItem("axion.tasks.demo.v1");
     } catch (error) {
-      console.error("Could not load demo player cache", error);
-      notify(t("player.demoCacheLoadFailed", { detail: error instanceof Error ? error.message : String(error) }));
+      console.error("Could not remove legacy demo data", error);
     }
-  }, [notify, t]);
-
-  useEffect(() => {
-    if (!demoPlayersLoaded) return;
-    try {
-      saveDemoPlayers(demoPlayers);
-    } catch (error) {
-      notify(t("player.demoCacheSaveFailed", { detail: error instanceof Error ? error.message : String(error) }));
-    }
-  }, [demoPlayers, demoPlayersLoaded, notify, t]);
+  }, []);
 
   useEffect(() => {
     if (!initialProfilePlayerId) return;
@@ -253,7 +223,7 @@ export default function PlayersPage({
   }, [executePlayerIds.length, isExecuting]);
 
   const stats = useMemo(() => {
-    const players = [...snapshot.players, ...demoPlayers];
+    const players = snapshot.players;
     return {
       total: players.length,
       online: players.filter((p) => p.status === "online").length,
@@ -261,7 +231,7 @@ export default function PlayersPage({
       idle: players.filter((p) => p.status === "idle").length,
       offline: players.filter((p) => p.status === "offline").length,
     };
-  }, [snapshot.players, demoPlayers]);
+  }, [snapshot.players]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -290,15 +260,6 @@ export default function PlayersPage({
         return a.name.localeCompare(b.name);
       });
   }, [snapshot.players, query, filter]);
-
-  const visibleDemoPlayers = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return demoPlayers.filter((player) =>
-      (filter === "all" || player.status === filter) &&
-      (!q || [player.name, player.id, player.task, player.description]
-        .some((value) => value.toLowerCase().includes(q))),
-    );
-  }, [demoPlayers, filter, query]);
 
   const togglePlayerSelection = (playerId: string) => {
     setSelectedPlayerId(null);
@@ -529,29 +490,6 @@ export default function PlayersPage({
     if (player.status === "offline" || player.status === "error" || !player.connectedAt) return "—";
     return <LiveTime timestamp={player.connectedAt} mode="connected" />;
   };
-  const removeDemoPlayer = (playerId: string) => {
-    setDemoPlayers((previous) => previous.filter((player) => player.id !== playerId));
-  };
-  const openDemoEditor = (player?: DemoPlayer) => {
-    setDemoEditingId(player?.id ?? null);
-    setDemoDraft(player
-      ? { name: player.name, status: player.status, uptime: player.uptime, task: player.task, description: player.description, progress: player.progress }
-      : { name: "", status: "online", uptime: "", task: "", description: "", progress: null });
-    setDemoEditorOpen(true);
-  };
-  const saveDemoPlayer = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!demoDraft.name.trim()) {
-      notify(t("player.demoInvalidName"));
-      return;
-    }
-    const nextPlayer = { ...demoDraft, id: demoEditingId ?? createDemoPlayerId(), name: demoDraft.name.trim() };
-    setDemoPlayers((previous) => demoEditingId
-      ? previous.map((player) => player.id === demoEditingId ? nextPlayer : player)
-      : [...previous, nextPlayer]);
-    setDemoPlayersLoaded(true);
-    setDemoEditorOpen(false);
-  };
   return (
     <div className="page page-players">
       <div className="players-stats">
@@ -607,9 +545,6 @@ export default function PlayersPage({
           onClick={onRefresh}
         >
           <RefreshCw size={14} /> {t("player.refresh")}
-        </button>
-        <button className="players-refresh" onClick={() => openDemoEditor()}>
-          <Plus size={14} /> {t("player.addDemo")}
         </button>
         <button
           className="players-refresh"
@@ -716,103 +651,12 @@ export default function PlayersPage({
             </article>
           );
         })}
-        {visibleDemoPlayers.map((player) => (
-          <article key={player.id} className={`player-card player-card-demo status-${player.status}`}>
-            <header className="player-card-header">
-              <div className="player-card-identity">
-                <div className="player-avatar">{player.name.charAt(0)}</div>
-                <div className="player-card-name">
-                  <strong>{player.name}</strong>
-                  <code>{player.id}</code>
-                </div>
-              </div>
-              <span className={`player-card-status ${player.status}`}>
-                <i /> {statusLabel(player.status)}
-              </span>
-            </header>
-            <div className="player-card-demo-label">{t("player.demoBadge")}</div>
-            <div className="player-card-body">
-              <div className="player-card-detail">
-                <span>{t("player.onlineFor")}</span>
-                <strong>{player.uptime}</strong>
-              </div>
-              <div className="player-card-detail player-card-task-detail">
-                <span>{t("player.currentTask")}</span>
-                <strong>{player.task || "—"}</strong>
-                {player.progress !== null && <div className="player-card-progress"><i style={{ width: `${player.progress}%` }} /></div>}
-              </div>
-              <div className="player-card-description">
-                <span>{t("player.description")}</span>
-                <p>{player.description || "—"}</p>
-              </div>
-            </div>
-            <footer className="player-card-actions">
-              <button type="button" onClick={() => openDemoEditor(player)}><Pencil size={14} /> {t("player.editDemo")}</button>
-              <button type="button" onClick={() => removeDemoPlayer(player.id)}><Trash2 size={14} /> {t("player.deleteDemo")}</button>
-            </footer>
-          </article>
-        ))}
-        {visible.length === 0 && visibleDemoPlayers.length === 0 && (
+        {visible.length === 0 && (
           <div className="players-card-empty">
-            {snapshot.players.length > 0 || demoPlayers.length > 0 ? t("player.notFound") : t("player.empty")}
+            {snapshot.players.length > 0 ? t("player.notFound") : t("player.empty")}
           </div>
         )}
       </div>
-      {demoEditorOpen && (
-        <div className="modal-overlay" onClick={() => setDemoEditorOpen(false)}>
-          <form className="modal player-demo-editor" onSubmit={saveDemoPlayer} onClick={(event) => event.stopPropagation()}>
-            <header>
-              <h3>{t(demoEditingId ? "player.editDemo" : "player.addDemo")}</h3>
-              <button type="button" className="icon-btn" onClick={() => setDemoEditorOpen(false)} aria-label={t("common.close")}>
-                <X size={16} />
-              </button>
-            </header>
-            <label>
-              {t("player.username")}
-              <input required value={demoDraft.name} onChange={(event) => setDemoDraft((current) => ({ ...current, name: event.target.value }))} autoFocus />
-            </label>
-            <div className="form-row">
-              <label>
-                {t("player.demoStatus")}
-                <select value={demoDraft.status} onChange={(event) => setDemoDraft((current) => ({ ...current, status: event.target.value as PlayerStatus }))}>
-                  {(["online", "busy", "idle", "offline", "error"] as PlayerStatus[]).map((status) => (
-                    <option key={status} value={status}>{statusLabel(status)}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {t("player.onlineFor")}
-                <input value={demoDraft.uptime} onChange={(event) => setDemoDraft((current) => ({ ...current, uptime: event.target.value }))} placeholder="2h 15m" />
-              </label>
-            </div>
-            <label>
-              {t("player.currentTask")}
-              <input value={demoDraft.task} onChange={(event) => setDemoDraft((current) => ({ ...current, task: event.target.value }))} />
-            </label>
-            <label>
-              {t("player.description")}
-              <textarea value={demoDraft.description} onChange={(event) => setDemoDraft((current) => ({ ...current, description: event.target.value }))} rows={3} />
-            </label>
-            <label>
-              {t("player.demoProgress")}
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={demoDraft.progress ?? ""}
-                onChange={(event) => setDemoDraft((current) => ({
-                  ...current,
-                  progress: event.target.value === "" ? null : Math.max(0, Math.min(100, Number(event.target.value))),
-                }))}
-              />
-            </label>
-            <footer>
-              <button type="button" className="btn-ghost" onClick={() => setDemoEditorOpen(false)}>{t("agents.cancel")}</button>
-              <button className="btn-primary" type="submit">{t("player.demoSave")}</button>
-            </footer>
-          </form>
-        </div>
-      )}
       {selectedPlayer && (
         <div className="player-profile-overlay" onClick={() => setProfilePlayerId(null)}>
           <section

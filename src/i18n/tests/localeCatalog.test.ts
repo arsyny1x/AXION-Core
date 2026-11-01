@@ -126,10 +126,20 @@ describe("locale catalog validation", () => {
 
   it("provides every settings description in each shipped language", () => {
     const keys = [
-      "settings.autoDescription",
+      "settings.autoStart",
+      "settings.autoStartDescription",
+      "settings.autoStartLoadFailed",
+      "settings.autoStartUpdateFailed",
       "settings.notificationsDescription",
       "settings.themeDescription",
       "settings.languageDescription",
+      "serverScript.storageSummary",
+      "serverScript.storageUsed",
+      "serverScript.storageFree",
+      "serverScript.storageLoading",
+      "serverScript.storageUnavailable",
+      "serverScript.storageRefresh",
+      "serverScript.storageLoadFailed",
     ];
     const catalogs = [english, thai, vietnamese] as LocaleCatalog[];
 

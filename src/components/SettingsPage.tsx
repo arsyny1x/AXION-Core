@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { Check, ChevronDown, FolderOpen, RefreshCw, Settings } from "lucide-react";
 import { getLanguageLabel, useLanguage } from "../i18n/LanguageContext";
 
@@ -13,12 +14,42 @@ interface Props {
 
 export default function SettingsPage({ notify, theme, onThemeChange }: Props) {
   const { language, languages, languageStatus, setLanguage, refreshLanguages, t } = useLanguage();
-  const [auto, setAuto] = useState(true);
+  const [autoStart, setAutoStart] = useState(false);
+  const [autoStartLoading, setAutoStartLoading] = useState(true);
   const [notif, setNotif] = useState(true);
   const [refreshingLanguages, setRefreshingLanguages] = useState(false);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const languageTriggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!isTauri()) {
+      setAutoStartLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    void isEnabled()
+      .then(enabled => {
+        if (active) setAutoStart(enabled);
+      })
+      .catch(error => {
+        if (active) {
+          notify(t("settings.autoStartLoadFailed", {
+            detail: error instanceof Error ? error.message : String(error),
+          }));
+        }
+      })
+      .finally(() => {
+        if (active) setAutoStartLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [notify, t]);
 
   useEffect(() => {
     if (!languageMenuOpen) return;
@@ -74,6 +105,26 @@ export default function SettingsPage({ notify, theme, onThemeChange }: Props) {
     }
   };
 
+  const toggleAutoStart = async () => {
+    if (!isTauri() || autoStartLoading) return;
+    setAutoStartLoading(true);
+    try {
+      if (autoStart) {
+        await disable();
+        setAutoStart(false);
+      } else {
+        await enable();
+        setAutoStart(true);
+      }
+    } catch (error) {
+      notify(t("settings.autoStartUpdateFailed", {
+        detail: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setAutoStartLoading(false);
+    }
+  };
+
   return (
     <div className="page settings-page">
       <section className="card settings-page-card">
@@ -86,16 +137,17 @@ export default function SettingsPage({ notify, theme, onThemeChange }: Props) {
 
         <div className="setting-row">
           <div>
-            <b>{t("settings.auto")}</b>
-            <small>{t("settings.autoDescription")}</small>
+            <b>{t("settings.autoStart")}</b>
+            <small>{t("settings.autoStartDescription")}</small>
           </div>
           <button
             className="setting-toggle"
             type="button"
             role="switch"
-            aria-label={t("settings.auto")}
-            aria-checked={auto}
-            onClick={() => setAuto(value => !value)}
+            aria-label={t("settings.autoStart")}
+            aria-checked={autoStart}
+            disabled={autoStartLoading || !isTauri()}
+            onClick={() => void toggleAutoStart()}
           />
         </div>
 

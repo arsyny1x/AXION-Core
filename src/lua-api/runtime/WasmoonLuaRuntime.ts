@@ -1,4 +1,4 @@
-import { LuaFactory, type LuaEngine } from "wasmoon";
+import type { LuaEngine, LuaFactory } from "wasmoon";
 import type {
   ILuaRuntime,
   LuaRuntimeInitializeOptions,
@@ -7,7 +7,7 @@ import type {
 } from "./ILuaRuntime";
 
 export class WasmoonLuaRuntime implements ILuaRuntime {
-  private factory = new LuaFactory();
+  private factory: Promise<LuaFactory> | null = null;
   private engines = new Map<string, LuaEngine>();
   private state: LuaRuntimeState = "uninitialized";
   private globals = new Map<string, unknown>();
@@ -27,7 +27,8 @@ export class WasmoonLuaRuntime implements ILuaRuntime {
 
     let engine: LuaEngine | undefined;
     try {
-      engine = await this.factory.createEngine({ functionTimeout: this.defaultTimeoutMs });
+      const factory = await this.getFactory();
+      engine = await factory.createEngine({ functionTimeout: this.defaultTimeoutMs });
       for (const [name, value] of this.globals) engine.global.set(name, value);
 
       const perScript = this.scriptGlobals.get(metadata.scriptId) ?? new Map<string, unknown>();
@@ -103,6 +104,13 @@ export class WasmoonLuaRuntime implements ILuaRuntime {
 
   getState(): LuaRuntimeState {
     return this.state;
+  }
+
+  private getFactory(): Promise<LuaFactory> {
+    if (!this.factory) {
+      this.factory = import("wasmoon").then(({ LuaFactory }) => new LuaFactory());
+    }
+    return this.factory;
   }
 
   async dispose(): Promise<void> {

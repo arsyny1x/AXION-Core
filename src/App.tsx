@@ -1,8 +1,6 @@
-import ApiDocsPage from "./components/ApiDocsPage";
-import PlayersPage from "./components/PlayersPage";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { CheckCircle2, Clock3, ListTodo, Monitor, MonitorX, Play, Users, Crosshair, FileCode2 } from "lucide-react";
+import { CheckCircle2, Clock3, ListTodo, Monitor, MonitorX, Play } from "lucide-react";
 import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
 import WelcomeBanner from "./components/WelcomeBanner";
@@ -10,7 +8,6 @@ import TaskBoard from "./components/TaskBoard";
 import AgentsPanel from "./components/AgentsPanel";
 import LiveLog from "./components/LiveLog";
 import TaskControls from "./components/TaskControls";
-import ServerScriptsPage from "./components/ServerScriptsPage";
 import SettingsPage from "./components/SettingsPage";
 import Toaster from "./components/Toaster";
 import { LanguageProvider, useLanguage } from "./i18n/LanguageContext";
@@ -22,6 +19,10 @@ import { loadSavedServerScripts } from "./services/serverScriptsService";
 import { loadSavedTasks, saveTasks } from "./services/taskStorage";
 import { addTaskStatusNotification } from "./services/notificationService";
 import { writeLog } from "./services/logService";
+
+const ApiDocsPage = lazy(() => import("./components/ApiDocsPage"));
+const PlayersPage = lazy(() => import("./components/PlayersPage"));
+const ServerScriptsPage = lazy(() => import("./components/ServerScriptsPage"));
 
 const PAGE_INFO: Record<string, { title: LanguageMessageKey; description: LanguageMessageKey }> = {
   home: { title: "page.home.title", description: "page.home.description" },
@@ -206,13 +207,10 @@ function AppContent() {
   const updateTask = (id: number, patch: Partial<Task>) => {
     const currentTask = tasks.find((task) => task.id === id);
     if (currentTask && patch.status !== currentTask.status) {
-      const taskTitle = currentTask.mockupType
-        ? t(`task.mockup${currentTask.mockupType[0].toUpperCase()}${currentTask.mockupType.slice(1)}Title`)
-        : currentTask.title;
       if (patch.status === "running") {
-        addTaskStatusNotification(t("task.startedTask", { title: taskTitle }));
+        addTaskStatusNotification(t("task.startedTask", { title: currentTask.title }));
       } else if (patch.status === "done") {
-        addTaskStatusNotification(t("task.completedTask", { title: taskTitle }));
+        addTaskStatusNotification(t("task.completedTask", { title: currentTask.title }));
       }
     }
     setTasks((previous) => previous.map((task) => (task.id === id ? { ...task, ...patch } : task)));
@@ -222,67 +220,6 @@ function AppContent() {
     setTasks((previous) => previous.filter((task) => task.id !== id));
     writeLog("warn", `task:${id}`, "Task deleted");
   };
-  const addMockupTasks = () => {
-    if (tasks.some((task) => task.isMockup)) {
-      notify(t("task.mockupAlreadyExists"));
-      return;
-    }
-    setTasks((previous) => {
-      if (previous.some((task) => task.isMockup)) return previous;
-      const firstId = previous.reduce((maxId, task) => Math.max(maxId, task.id), 0) + 1;
-      const now = new Date().toLocaleString();
-      return [
-        {
-          id: firstId,
-          title: t("task.mockupPatrolTitle"),
-          desc: t("task.mockupPatrolDescription"),
-          tag: "Blox Fruits",
-          icon: Users,
-          color: "blue",
-          status: "running",
-          progress: 2,
-          total: 3,
-          created: now,
-          updated: now,
-          isMockup: true,
-          mockupType: "patrol",
-        },
-        {
-          id: firstId + 1,
-          title: t("task.mockupRaidTitle"),
-          desc: t("task.mockupRaidDescription"),
-          tag: "Raid",
-          icon: Crosshair,
-          color: "violet",
-          status: "pending",
-          progress: 0,
-          total: 2,
-          created: now,
-          updated: now,
-          isMockup: true,
-          mockupType: "raid",
-        },
-        {
-          id: firstId + 2,
-          title: t("task.mockupTestTitle"),
-          desc: t("task.mockupTestDescription"),
-          tag: "Test",
-          icon: FileCode2,
-          color: "green",
-          status: "done",
-          progress: 4,
-          total: 4,
-          created: now,
-          updated: now,
-          isMockup: true,
-          mockupType: "test",
-        },
-        ...previous,
-      ];
-    });
-    notify(t("task.mockupAdded"));
-  };
-
   const counts = {
     tasks: tasks.length,
     scripts: scriptCount,
@@ -300,10 +237,6 @@ function AppContent() {
         task.title,
         task.desc,
         task.tag,
-        ...(task.mockupType ? [
-          t(`task.mockup${task.mockupType[0].toUpperCase()}${task.mockupType.slice(1)}Title`),
-          t(`task.mockup${task.mockupType[0].toUpperCase()}${task.mockupType.slice(1)}Description`),
-        ] : []),
       ].some((value) => value.toLocaleLowerCase().includes(search)))
     );
   }, [tasks, taskQuery, taskFilter, t]);
@@ -352,7 +285,6 @@ function AppContent() {
           offline: offlinePlayerCount,
           running: runningCount,
           pending: pendingCount,
-          done: doneCount,
         }}
         uptimeStartedAt={uptimeStartedAt}
       />
@@ -369,7 +301,8 @@ function AppContent() {
           serverConnected={serverConnected}
         />
 
-        {page === "home" ? (
+        <Suspense fallback={<div className="page" aria-busy="true" />}>
+          {page === "home" ? (
           <div className="page home-page">
             <div className="content-grid">
               <div className="col-main">
@@ -470,8 +403,6 @@ function AppContent() {
               onUpdate={updateTask}
               onDelete={deleteTask}
               notify={notify}
-              onAddMockup={addMockupTasks}
-              hasMockupTasks={tasks.some((task) => task.isMockup)}
             />
           </div>
         ) : page === "api-docs" ? (
@@ -505,7 +436,8 @@ function AppContent() {
               </button>
             </section>
           </div>
-        )}
+          )}
+        </Suspense>
 
       </div>
 

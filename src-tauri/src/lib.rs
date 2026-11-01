@@ -395,6 +395,9 @@ struct CachedInventory {
 struct InventoryCacheUpdated {
     #[serde(flatten)]
     snapshot: CachedInventory,
+    inventory_delta: bool,
+    reported_item_count: usize,
+    removed_item_count: usize,
     message_size_bytes: usize,
     max_message_bytes: usize,
 }
@@ -1043,6 +1046,32 @@ impl AxionServer {
             .workspace_path
             .join(custom_game_id)
             .join(format!("{account_id}.json"));
+
+        if let Some(legacy_file_path) = self
+            .workspace_path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::parent)
+            .map(|data_parent| {
+                data_parent
+                    .join("com.autohub.app")
+                    .join("Database")
+                    .join("Workspace")
+                    .join(custom_game_id)
+                    .join(format!("{account_id}.json"))
+            })
+        {
+            match fs::remove_file(legacy_file_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "Could not remove legacy account workspace: {error}"
+                    ));
+                }
+            }
+        }
+
         fs::remove_file(&file_path)
             .map_err(|error| format!("Could not remove account workspace: {error}"))?;
         workspaces.remove(&key);
@@ -2175,6 +2204,90 @@ fn axion_item_cache_list(server: State<'_, Arc<AxionServer>>) -> Vec<CachedInven
     server.list_inventories()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatabaseStorageInfo {
+    used_bytes: u64,
+    free_bytes: Option<u64>,
+}
+
+#[tauri::command]
+fn axion_database_storage(app: AppHandle) -> Result<DatabaseStorageInfo, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not locate the application data directory: {error}"))?;
+    let database_dir = app_data_dir.join("Database");
+    let used_bytes = directory_size(&database_dir)?;
+    let free_bytes = available_disk_space(&app_data_dir)?;
+    Ok(DatabaseStorageInfo {
+        used_bytes,
+        free_bytes,
+    })
+}
+
+fn directory_size(path: &std::path::Path) -> Result<u64, String> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("Could not read database directory: {error}")),
+    };
+    let mut total = 0u64;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Could not inspect database entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Could not inspect database entry type: {error}"))?;
+        let size = if file_type.is_dir() {
+            directory_size(&entry.path())?
+        } else if file_type.is_file() {
+            entry
+                .metadata()
+                .map_err(|error| format!("Could not read database file size: {error}"))?
+                .len()
+        } else {
+            0
+        };
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| "Database size exceeds the supported range".to_string())?;
+    }
+    Ok(total)
+}
+
+#[cfg(windows)]
+fn available_disk_space(path: &std::path::Path) -> Result<Option<u64>, String> {
+    use std::{iter, os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect::<Vec<_>>();
+    let mut available_bytes = 0u64;
+    let succeeded = unsafe {
+        GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &mut available_bytes,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if succeeded == 0 {
+        return Err(format!(
+            "Could not read free disk space: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(Some(available_bytes))
+}
+
+#[cfg(not(windows))]
+fn available_disk_space(_path: &std::path::Path) -> Result<Option<u64>, String> {
+    Ok(None)
+}
+
 #[tauri::command]
 fn save_server_script_profile(path: String, contents: String) -> Result<(), String> {
     let output_path = PathBuf::from(path);
@@ -3102,6 +3215,44 @@ fn count_items(value: &Value) -> usize {
     value.as_object().map_or(0, serde_json::Map::len)
 }
 
+fn inventory_report_counts(payload: &Value) -> (bool, usize, usize) {
+    let Some(object) = payload.as_object() else {
+        return (false, 0, 0);
+    };
+    let inventory_delta = object
+        .get("inventoryDelta")
+        .or_else(|| object.get("InventoryDelta"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let removed_item_count = object
+        .get("inventoryRemoved")
+        .or_else(|| object.get("InventoryRemoved"))
+        .and_then(Value::as_object)
+        .map(|categories| {
+            categories
+                .values()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .sum()
+        })
+        .unwrap_or(0);
+    let reported_item_count = if inventory_delta {
+        object
+            .get("inventoryChanges")
+            .or_else(|| object.get("InventoryChanges"))
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    } else {
+        object
+            .get("inventory")
+            .or_else(|| object.get("Inventory"))
+            .and_then(Value::as_object)
+            .map(|categories| categories.values().map(count_items).sum())
+            .unwrap_or(0)
+    };
+    (inventory_delta, reported_item_count, removed_item_count)
+}
+
 fn merge_inventory(
     target: &mut WorkspaceInventory,
     values: HashMap<String, Value>,
@@ -3545,10 +3696,15 @@ fn process_workspace_report(
     };
     match server.store_workspace_report(&connected_agent, &payload) {
         Ok(snapshot) => {
+            let (inventory_delta, reported_item_count, removed_item_count) =
+                inventory_report_counts(&payload);
             let _ = app.emit(
                 "axion-item-cache-updated",
                 InventoryCacheUpdated {
                     snapshot,
+                    inventory_delta,
+                    reported_item_count,
+                    removed_item_count,
                     message_size_bytes,
                     max_message_bytes: MAX_MESSAGE_BYTES,
                 },
@@ -3685,6 +3841,10 @@ fn heartbeat_expired(last_message_at: Instant, now: Instant) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
@@ -3730,6 +3890,7 @@ pub fn run() {
             axion_server_script_set_token,
             axion_server_script_respond,
             axion_item_cache_list,
+            axion_database_storage,
             axion_item_cache_update,
             axion_item_cache_add,
             axion_item_cache_delete,
@@ -3768,6 +3929,27 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(1));
         drop(AgentConnectionGuard(counter.clone()));
         assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn database_directory_size_includes_nested_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "axion-database-size-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let nested = directory.join("Workspace").join("AXION_TEST");
+        fs::create_dir_all(&nested).expect("database test directory should be created");
+        fs::write(directory.join("settings.json"), b"12345")
+            .expect("database settings should be writable");
+        fs::write(nested.join("account.json"), b"1234567")
+            .expect("workspace file should be writable");
+
+        assert_eq!(
+            directory_size(&directory).expect("database size should be readable"),
+            12
+        );
+        fs::remove_dir_all(&directory).expect("database test directory should be removed");
     }
 
     fn encode_binary_test_value(value: &Value, bytes: &mut Vec<u8>) {
@@ -4425,6 +4607,29 @@ mod tests {
     }
 
     #[test]
+    fn inventory_report_counts_distinguish_deltas_from_cached_items() {
+        let delta = serde_json::json!({
+            "inventoryDelta": true,
+            "inventory": {},
+            "inventoryChanges": [
+                {"category": "materials", "name": "Iron", "path": [], "value": {"quantity": 3}}
+            ],
+            "inventoryRemoved": {"materials": ["Wood"]}
+        });
+        assert_eq!(inventory_report_counts(&delta), (true, 1, 1));
+
+        let snapshot = serde_json::json!({
+            "inventory": {
+                "materials": {
+                    "Iron": {"quantity": 3},
+                    "Wood": {"quantity": 1}
+                }
+            }
+        });
+        assert_eq!(inventory_report_counts(&snapshot), (false, 2, 0));
+    }
+
+    #[test]
     fn validates_server_script_api_port_range_and_reservation() {
         assert!(validate_script_api_port(1024, SERVER_PORT).is_ok());
         assert!(validate_script_api_port(5243, SERVER_PORT).is_ok());
@@ -4767,8 +4972,16 @@ mod tests {
 
     #[test]
     fn deletes_account_workspace_from_disk_and_cache() {
-        let test_dir =
-            std::env::temp_dir().join(format!("axion-delete-workspace-test-{}", now_ms()));
+        let test_root = std::env::temp_dir().join(format!(
+            "axion-delete-workspace-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let test_dir = test_root.join("com.axion.app");
+        let legacy_workspace_path = test_root
+            .join("com.autohub.app")
+            .join("Database")
+            .join("Workspace");
         let workspace_path = test_dir.join("Database").join("Workspace");
         let server =
             AxionServer::new(workspace_path.clone()).expect("new workspace should be empty");
@@ -4794,13 +5007,31 @@ mod tests {
             .expect("workspace should be persisted");
 
         let workspace_file = workspace_path.join("DELETE_TEST").join("account-1.json");
+        let legacy_workspace_file = legacy_workspace_path
+            .join("DELETE_TEST")
+            .join("account-1.json");
+        fs::create_dir_all(
+            legacy_workspace_file
+                .parent()
+                .expect("legacy parent exists"),
+        )
+        .expect("legacy workspace directory should be created");
+        fs::copy(&workspace_file, &legacy_workspace_file)
+            .expect("legacy workspace copy should be created");
         assert!(workspace_file.exists());
         server
             .delete_account_workspace("DELETE_TEST", "account-1")
             .expect("workspace should be deleted");
 
         assert!(!workspace_file.exists());
+        assert!(!legacy_workspace_file.exists());
         assert!(server.list_inventories().is_empty());
+        copy_missing_files(&test_root.join("com.autohub.app"), &test_dir)
+            .expect("legacy migration should run without restoring the deleted workspace");
+        assert!(!workspace_file.exists());
+        let restarted_server =
+            AxionServer::new(workspace_path.clone()).expect("server should restart without data");
+        assert!(restarted_server.list_inventories().is_empty());
         assert!(server
             .delete_account_workspace("DELETE_TEST", "account-1")
             .is_err());
@@ -4808,12 +5039,7 @@ mod tests {
             .delete_account_workspace("../DELETE_TEST", "account-1")
             .is_err());
 
-        fs::remove_dir(workspace_path.join("DELETE_TEST"))
-            .expect("game workspace folder should be removed");
-        fs::remove_dir(workspace_path).expect("workspace root should be removed");
-        fs::remove_dir(test_dir.join("Database"))
-            .expect("temporary database folder should be removed");
-        fs::remove_dir(test_dir).expect("temporary test folder should be removed");
+        fs::remove_dir_all(test_root).expect("temporary workspace test data should be removed");
     }
 
     #[test]

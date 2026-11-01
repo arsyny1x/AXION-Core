@@ -1,0 +1,81 @@
+AXION Core — memory leak & performance review
+Static pass over React/Tauri/Lua (AXION/). Not a heap dump. Source: codebase as of 19 Oct 2026.
+
+3
+High leak / WASM risks
+6
+Medium leak or hot-path cost
+3
+Low UI cost
+What this app already does well
+Most React listeners have cleanup. PlayerService generation-guards Tauri listen(). Logs, notifications, and inventory caches have caps. Heartbeat UI events are throttled to 10s in Rust. LiveTime shares one interval.
+Highest impact
+H1: disposeLuaApi is fire-and-forget under StrictMode
+src/App.tsx + luaApiService.ts
+
+App unmount cleanup calls void disposeLuaApi() without awaiting. React StrictMode unmounts then remounts immediately, so getLuaApi() can create a second Wasmoon runtime while the first WASM engine is still closing. Two LuaFactory/WASM heaps can stay alive in Dev.
+
+Serialize init/dispose with a generation token; await dispose before creating a new module; skip dispose on StrictMode fake-unmount or use a process-lifetime singleton that is not disposed from App effect cleanup.
+
+H2: New LuaFactory on every Server Script load
+src/services/serverScriptsService.ts
+
+loadServerScript() does new LuaFactory() then createEngine() for each load/reload. LuaFactory typically fetches and instantiates WASM. Old engines are closed, but factories are dropped with no dispose. Reloading scripts during a session repeats WASM allocation.
+
+Reuse one shared LuaFactory (like WasmoonLuaRuntime). Close only the engine. Optionally cache compiled engines by source hash (already skipped when source unchanged).
+
+H3: Lua timeout does not stop the engine
+src/lua-api/runtime/WasmoonLuaRuntime.ts
+
+executeScript races doString against setTimeout. On timeout the Promise rejects but engine.doString keeps running. WASM/Lua continues allocating until the script finishes or the engine is later closed. Server scripts use functionTimeout: 4000; the shared runtime does not.
+
+Use Wasmoon functionTimeout / interrupt; on timeout call engine.global.close() and drop the engine from the map.
+
+All findings
+ID	Sev	Type	Location	Risk
+H1
+High	Leak	src/App.tsx + luaApiService.ts	disposeLuaApi is fire-and-forget under StrictMode
+H2
+High	Leak + CPU	src/services/serverScriptsService.ts	New LuaFactory on every Server Script load
+H3
+High	Leak	src/lua-api/runtime/WasmoonLuaRuntime.ts	Lua timeout does not stop the engine
+M1
+Medium	Leak	src/services/playerService.ts + playerRegistryStorage.ts	Offline players never leave memory or localStorage
+M2
+Medium	Perf	src/services/playerService.ts	Every agent event copies the registry and writes localStorage
+M3
+Medium	Perf	src/services/logService.ts + LiveLog.tsx	Console hook + 2000-entry copy on every log
+M4
+Medium	Leak + Perf	src/services/robloxAvatarService.ts	Avatar cache and request sets grow; failed lookups retry
+M5
+Medium	Leak	src/lua-api/api/utils.ts + ScriptManager	Lua sleep timers and Core scopes are not cancelled on stop
+M6
+Medium	Leak	src-tauri/src/lib.rs	deleted_agent_ids and one OS thread per connection
+L1
+Low	Perf	src/components/SyntaxCode.tsx	highlight.js on every keystroke
+L2
+Low	Perf	src/lua-api/transport/MockCoreTransport.ts	Unbounded sent[] history
+L3
+Low	Perf	src/components/Sidebar.tsx + PlayersPage.tsx	1 Hz timers
+L4
+Low	OK	logService / notifications / inventory	Already bounded
+Hot paths (why the UI can hitch)
+Agent heartbeat → React
+Rust emits axion-agent-heartbeat about every 10s per agent. PlayerService.emit() clones all players. AgentsPanelsetPlayers(snapshot.players) and PlayersPagesetSnapshot rebuild lists. Avatar request effects run because the array identity changed. Persist is skipped on heartbeat, but React work is not.
+
+Console → LiveLog
+Any console.log becomes a log entry, a 2000-item slice, and a React state update if LiveLog is mounted (console page, or home AgentsPanel when the player list is empty).
+
+localStorage on the registry
+Connect / update / list / status all call saveCachedPlayers synchronously. Size grows with unique agents (see M1).
+
+Suggested order of work
+Order	Change	Why first
+1	Reuse one LuaFactory; abort Lua on timeout	WASM leaks dominate RSS in long sessions with scripts.
+2	Do not dispose Lua from StrictMode App cleanup (or await + generation)	Stops double WASM in Dev and HMR.
+3	Cap/prune player registry + debounce persist	Stops unbounded localStorage and heartbeat-adjacent writes.
+4	Fix AgentsPanel empty-state ternary; cheaper log notify	Stops accidental LiveLog subscription on home.
+5	Avatar eviction + negative cache	Stops retry storms and unbounded URL maps.
+Review method: repository search for timers, listeners, Maps, WASM, and persist paths; file reads of App, playerService, logService, serverScriptsService, WasmoonLuaRuntime, lib.rs. No runtime profiler attached.
+
+If you want, next step is to patch items 1–4 only.

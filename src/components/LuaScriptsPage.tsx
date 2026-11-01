@@ -65,12 +65,12 @@ function getStatusKey(status: string | undefined): LanguageMessageKey {
   return "script.saved";
 }
 
-function createEmptyScript(t: Translate): LuaScript {
+function createEmptyScript(): LuaScript {
   return {
     id: globalThis.crypto?.randomUUID?.() ?? `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: "",
     scriptId: "",
-    source: t("script.defaultCode"),
+    source: "",
   };
 }
 
@@ -112,7 +112,7 @@ export default function LuaScriptsPage({ api, apiReady, apiError, notify, onCoun
       const saved = readScripts(translateRef.current);
       setScripts(saved);
       setSelectedId(saved[0]?.id ?? null);
-      if (saved.length === 0) setDraft(createEmptyScript(translateRef.current));
+      if (saved.length === 0) setDraft(createEmptyScript());
       setStatuses(Object.fromEntries(
         saved.map(script => [script.id, api.scripts.get(script.id)?.runtimeState ?? "saved"])
       ));
@@ -158,7 +158,7 @@ export default function LuaScriptsPage({ api, apiReady, apiError, notify, onCoun
 
   const createScript = () => {
     setSelectedId(null);
-    setDraft(createEmptyScript(t));
+    setDraft(createEmptyScript());
   };
 
   const saveScript = async () => {

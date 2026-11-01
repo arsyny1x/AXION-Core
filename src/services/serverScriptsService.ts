@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LuaFactory, type LuaEngine } from "wasmoon";
+import type { LuaEngine, LuaFactory } from "wasmoon";
 import { writeLog } from "./logService";
 import { indexInventory, searchInventoryItems, type SearchableInventoryItem } from "./serverInventorySearch";
 
@@ -11,7 +11,7 @@ const LEGACY_SCRIPT_STORAGE_KEY = "autohub.server-scripts.v1";
 const MAX_SCRIPT_RESULT_BYTES = 16 * 1024;
 const MAX_SCRIPT_SOURCE_BYTES = 64 * 1024;
 const MAX_EXPORTED_FUNCTIONS = 64;
-const serverScriptFactory = new LuaFactory();
+let serverScriptFactory: Promise<LuaFactory> | null = null;
 
 export interface ServerScript {
   id: string;
@@ -70,6 +70,13 @@ let savedScriptsReloadPromise: Promise<{ scripts: ServerScript[]; errors: string
 
 function inventoryKey(snapshot: Pick<InventorySnapshot, "customGameId" | "accountId">): string {
   return `${snapshot.customGameId}/${snapshot.accountId}`;
+}
+
+function getServerScriptFactory(): Promise<LuaFactory> {
+  if (!serverScriptFactory) {
+    serverScriptFactory = import("wasmoon").then(({ LuaFactory }) => new LuaFactory());
+  }
+  return serverScriptFactory;
 }
 
 function scriptScopeKey(customGameId: string, scriptId: string): string {
@@ -410,7 +417,8 @@ export async function loadServerScript(script: ServerScript): Promise<string[]> 
   if (currentRuntime?.source === script.source) {
     return Object.keys(currentRuntime.functions);
   }
-  const engine = await serverScriptFactory.createEngine({ functionTimeout: 4_000 });
+  const factory = await getServerScriptFactory();
+  const engine = await factory.createEngine({ functionTimeout: 4_000 });
   engine.global.set("Server", buildServerApi(script.customGameId));
 
   try {

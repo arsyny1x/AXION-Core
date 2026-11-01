@@ -132,6 +132,9 @@ export function initializeLogService(): void {
       customGameId: string;
       accountId: string;
       items: unknown[];
+      inventoryDelta: boolean;
+      reportedItemCount: number;
+      removedItemCount: number;
       messageSizeBytes?: number;
       maxMessageBytes?: number;
     }>(
@@ -139,10 +142,13 @@ export function initializeLogService(): void {
       ({ payload }) => {
         if (payload.messageSizeBytes === undefined || !payload.maxMessageBytes) return;
         const messageSize = `, message ${payload.messageSizeBytes} / ${payload.maxMessageBytes} bytes (${(payload.messageSizeBytes / payload.maxMessageBytes * 100).toFixed(1)}%)`;
+        const reportSummary = payload.inventoryDelta
+          ? `${payload.reportedItemCount} changed values, ${payload.removedItemCount} removed`
+          : `${payload.reportedItemCount} items reported`;
         writeLog(
           "info",
           `agent:${payload.agentId}`,
-          `Inventory cache updated (${payload.items.length} items, ${payload.customGameId}/${payload.accountId}${messageSize})`,
+          `Inventory cache updated (${payload.items.length} items cached; ${reportSummary}, ${payload.customGameId}/${payload.accountId}${messageSize})`,
         );
       },
     ),
